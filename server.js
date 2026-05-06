@@ -1,40 +1,25 @@
-require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
-const Razorpay = require('razorpay');
+require("dotenv").config();
 
-const app = express();
+const { createApp } = require("./src/app");
+const { jobQueue } = require("./src/services/jobQueue");
+const { logger } = require("./src/utils/logger");
+const { config } = require("./src/config");
 
-app.use(cors());
-app.use(express.json());
+const app = createApp();
 
-const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID,
-  key_secret: process.env.RAZORPAY_KEY_SECRET,
+const server = app.listen(config.port, () => {
+  logger.info(`CVMatch backend running on http://localhost:${config.port}`);
 });
 
-app.post('/create-order', async (req, res) => {
-  try {
-    const options = {
-      amount: 4900, // amount in the smallest currency unit (paise) -> 49 INR
-      currency: "INR",
-      receipt: "receipt_order_" + Date.now(),
-    };
+const shutdown = async (signal) => {
+  logger.info(`${signal} received, shutting down gracefully...`);
 
-    const order = await razorpay.orders.create(options);
-    
-    if (!order) {
-      return res.status(500).send("Some error occurred");
-    }
-    
-    res.json(order);
-  } catch (error) {
-    console.error("Error creating order:", error);
-    res.status(500).json({ error: error.message });
-  }
-});
+  server.close(async () => {
+    await jobQueue.close();
+    logger.info("HTTP server closed.");
+    process.exit(0);
+  });
+};
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Backend server running on http://localhost:${PORT}`);
-});
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
