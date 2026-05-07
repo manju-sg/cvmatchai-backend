@@ -1,41 +1,96 @@
-const fs = require("fs/promises");
-const path = require("path");
+const { pool } = require("./postgres");
 
-const { config } = require("../config");
+function mapRow(row) {
+  if (!row) return null;
 
-const jobsFile = path.join(config.dataDir, "jobs.json");
-
-async function ensureStore() {
-  await fs.mkdir(config.dataDir, { recursive: true });
-
-  try {
-    await fs.access(jobsFile);
-  } catch {
-    await fs.writeFile(jobsFile, JSON.stringify({ jobs: {} }, null, 2), "utf8");
-  }
+  return {
+    id: row.id,
+    status: row.status,
+    progress: row.progress,
+    jdTitle: row.jd_title,
+    jdContent: row.jd_content,
+    modelPreference: row.model_preference,
+    fileCount: row.file_count,
+    files: row.files_json || [],
+    results: row.results_json || [],
+    comparativeSummary: row.comparative_summary || "",
+    error: row.error || null,
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
+    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at,
+  };
 }
 
-async function readStore() {
-  await ensureStore();
-  const raw = await fs.readFile(jobsFile, "utf8");
-  return JSON.parse(raw);
+async function createJob(job) {
+  const result = await pool.query(
+    `
+      INSERT INTO jobs (
+        id, status, progress, jd_title, jd_content, model_preference, file_count,
+        files_json, results_json, comparative_summary, error, created_at, updated_at
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11,$12,$13)
+      RETURNING *
+    `,
+    [
+      job.id,
+      job.status,
+      job.progress,
+      job.jdTitle,
+      job.jdContent,
+      job.modelPreference,
+      job.fileCount,
+      JSON.stringify(job.files || []),
+      JSON.stringify(job.results || []),
+      job.comparativeSummary || "",
+      job.error || null,
+      job.createdAt,
+      job.updatedAt,
+    ]
+  );
+
+  return mapRow(result.rows[0]);
 }
 
-async function writeStore(store) {
-  await ensureStore();
-  await fs.writeFile(jobsFile, JSON.stringify(store, null, 2), "utf8");
-}
+async function updateJob(job) {
+  const result = await pool.query(
+    `
+      UPDATE jobs
+      SET
+        status = $2,
+        progress = $3,
+        jd_title = $4,
+        jd_content = $5,
+        model_preference = $6,
+        file_count = $7,
+        files_json = $8::jsonb,
+        results_json = $9::jsonb,
+        comparative_summary = $10,
+        error = $11,
+        updated_at = $12
+      WHERE id = $1
+      RETURNING *
+    `,
+    [
+      job.id,
+      job.status,
+      job.progress,
+      job.jdTitle,
+      job.jdContent,
+      job.modelPreference,
+      job.fileCount,
+      JSON.stringify(job.files || []),
+      JSON.stringify(job.results || []),
+      job.comparativeSummary || "",
+      job.error || null,
+      job.updatedAt,
+    ]
+  );
 
-async function upsertJob(job) {
-  const store = await readStore();
-  store.jobs[job.id] = job;
-  await writeStore(store);
-  return job;
+  return mapRow(result.rows[0]);
 }
 
 async function getJob(jobId) {
-  const store = await readStore();
-  return store.jobs[jobId] || null;
+  const result = await pool.query(`SELECT * FROM jobs WHERE id = $1 LIMIT 1`, [jobId]);
+  return mapRow(result.rows[0]);
 }
 
-module.exports = { upsertJob, getJob };
+module.exports = { createJob, updateJob, getJob };

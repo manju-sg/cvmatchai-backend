@@ -32,7 +32,7 @@ function createApp() {
   app.use(
     rateLimit({
       windowMs: 60 * 1000,
-      limit: 120,
+      limit: 240,
       standardHeaders: true,
       legacyHeaders: false,
     })

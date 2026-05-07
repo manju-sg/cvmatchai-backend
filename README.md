@@ -2,11 +2,13 @@
 
 Production-oriented backend for CVMatch AI with:
 
-- asynchronous job submission and polling
+- asynchronous job submission with Redis/BullMQ
+- Postgres-backed job state
+- live progress streaming over SSE with polling fallback
 - server-side PDF and DOCX parsing
-- bounded concurrency so large CV batches do not overwhelm the API process
+- bounded worker concurrency so large CV batches do not overwhelm the API process
 - low-cost first-pass scoring with Gemini 2.5 Flash for backend reasoning refinement
-- a backend-first architecture ready to move from single-instance to queued workers
+- a backend-first architecture ready for separate API and worker services
 
 ## Recommended model setup
 
@@ -47,17 +49,42 @@ Returns status and progress.
 
 Returns final candidate scores and comparative summary.
 
+`GET /api/jobs/:jobId/events`
+
+Streams live progress via Server-Sent Events.
+
 ## Install
 
 ```bash
 npm install
-npm start
+npm run start:api
+# in a separate process
+npm run start:worker
 ```
+
+Required environment:
+
+- `DATABASE_URL`
+- `REDIS_URL`
+- `GEMINI_API_KEY`
+- `RUN_JOB_WORKER=false` for the API process
+- `RUN_JOB_WORKER=true` for the worker process
+
+## Render
+
+This repo now includes [render.yaml](/C:/Users/Manjunath/OneDrive/Documents/codex/CVMatchAI_copy/backend/render.yaml) to provision:
+
+- one Node web service for the API
+- one Node worker service for BullMQ processing
+- one Postgres database
+- one Redis instance
+
+Use `npm run start:api` for the web service and `npm run start:worker` for the worker service.
 
 ## Production notes
 
 - put the API behind Nginx or a cloud load balancer
-- move job state from JSON storage to Postgres for multi-instance deployments
-- move the queue from in-process memory to Redis/BullMQ if you need horizontal scaling
+- run the API service and worker service separately in production by setting `RUN_JOB_WORKER=false` on the API and `RUN_JOB_WORKER=true` on the worker
+- use managed Postgres and managed Redis in Render, Railway, Neon, Upstash, or similar
 - store uploaded files in object storage if you want resumable/retry-friendly pipelines
 - keep the Gemini API key only on the backend, never in the mobile app

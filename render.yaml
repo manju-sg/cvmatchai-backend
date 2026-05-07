@@ -1,0 +1,63 @@
+services:
+  - type: web
+    name: cvmatch-backend-api
+    runtime: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm run start:api
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: RUN_JOB_WORKER
+        value: "false"
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: WORKER_CONCURRENCY
+        value: "4"
+      - key: MAX_QUEUED_JOBS
+        value: "1000"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: cvmatch-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: cvmatch-redis
+          property: connectionString
+
+  - type: worker
+    name: cvmatch-backend-worker
+    runtime: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm run start:worker
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: RUN_JOB_WORKER
+        value: "true"
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: WORKER_CONCURRENCY
+        value: "4"
+      - key: MAX_QUEUED_JOBS
+        value: "1000"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: cvmatch-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: cvmatch-redis
+          property: connectionString
+
+databases:
+  - name: cvmatch-postgres
+    plan: basic-256mb
+
+redis:
+  - name: cvmatch-redis
+    plan: starter

@@ -1,10 +1,7 @@
 const crypto = require("crypto");
 
-const { config } = require("../config");
-const { jobQueue } = require("./jobQueue");
-const { getJob, upsertJob } = require("./jobStore");
-const { parseFile } = require("./parser");
-const { scoreCandidates } = require("./scoring");
+const { enqueueJob, getQueueStats } = require("./queue");
+const { createJob, getJob, updateJob } = require("./jobStore");
 
 function badRequest(message) {
   const error = new Error(message);
@@ -20,7 +17,7 @@ function notFound(message) {
   return error;
 }
 
-function sanitizeJob(job) {
+async function sanitizeJob(job) {
   return {
     id: job.id,
     status: job.status,
@@ -29,6 +26,7 @@ function sanitizeJob(job) {
     updatedAt: job.updatedAt,
     jdTitle: job.jdTitle,
     fileCount: job.fileCount,
+    queue: await getQueueStats(),
     error: job.error || null,
   };
 }
@@ -59,15 +57,15 @@ async function createMatchJob({ jdTitle, jdContent, modelPreference, files }) {
     files: files.map((file) => ({
       fileName: file.originalname,
       mimeType: file.mimetype,
-      buffer: file.buffer.toString("base64"),
+      filePath: file.path,
+      fileSize: file.size,
     })),
     results: [],
     comparativeSummary: "",
   };
 
-  await upsertJob(job);
-
-  jobQueue.enqueue(() => processJob(job.id));
+  await createJob(job);
+  await enqueueJob(job.id);
 
   return {
     jobId: job.id,
@@ -75,53 +73,6 @@ async function createMatchJob({ jdTitle, jdContent, modelPreference, files }) {
     pollUrl: `/api/jobs/${job.id}`,
     resultUrl: `/api/jobs/${job.id}/results`,
   };
-}
-
-async function processJob(jobId) {
-  const job = await getJob(jobId);
-  if (!job) return;
-
-  job.status = "processing";
-  job.progress = 5;
-  job.updatedAt = new Date().toISOString();
-  await upsertJob(job);
-
-  try {
-    const parsedCandidates = [];
-
-    for (let index = 0; index < job.files.length; index += 1) {
-      const file = job.files[index];
-      const text = await parseFile({
-        originalname: file.fileName,
-        mimetype: file.mimeType,
-        buffer: Buffer.from(file.buffer, "base64"),
-      });
-
-      parsedCandidates.push({
-        fileName: file.fileName,
-        text,
-      });
-
-      job.progress = Math.min(65, Math.round(((index + 1) / job.files.length) * 60));
-      job.updatedAt = new Date().toISOString();
-      await upsertJob(job);
-    }
-
-    const scored = await scoreCandidates(job.jdContent, parsedCandidates, job.modelPreference);
-
-    job.status = "completed";
-    job.progress = 100;
-    job.results = scored.results;
-    job.comparativeSummary = scored.comparativeSummary;
-    job.files = job.files.map((file) => ({ fileName: file.fileName, mimeType: file.mimeType }));
-    job.updatedAt = new Date().toISOString();
-    await upsertJob(job);
-  } catch (error) {
-    job.status = "failed";
-    job.error = error.message;
-    job.updatedAt = new Date().toISOString();
-    await upsertJob(job);
-  }
 }
 
 async function getJobSummary(jobId) {
@@ -135,10 +86,19 @@ async function getJobResult(jobId) {
   if (!job) throw notFound("Job not found.");
 
   return {
-    ...sanitizeJob(job),
+    ...(await sanitizeJob(job)),
     results: job.results || [],
     comparativeSummary: job.comparativeSummary || "",
   };
 }
 
-module.exports = { createMatchJob, getJobSummary, getJobResult };
+async function markJobFailed(jobId, errorMessage) {
+  const job = await getJob(jobId);
+  if (!job) return;
+  job.status = "failed";
+  job.error = errorMessage;
+  job.updatedAt = new Date().toISOString();
+  await updateJob(job);
+}
+
+module.exports = { createMatchJob, getJobSummary, getJobResult, markJobFailed };
