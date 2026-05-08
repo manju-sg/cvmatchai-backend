@@ -66,25 +66,32 @@ Required environment:
 
 - `DATABASE_URL`
 - `REDIS_URL`
-- `GEMINI_API_KEY`
-- `RUN_JOB_WORKER=false` for the API process
-- `RUN_JOB_WORKER=true` for the worker process
+- `GEMINI_API_KEY` or `GEMINI_API_KEYS`
+- `RUN_JOB_WORKER=true` for single-service free mode
+
+If you want to spread load across multiple Gemini keys, set:
+
+```env
+GEMINI_API_KEYS=key_1,key_2,key_3,key_4,key_5
+```
+
+The backend will rotate across them and retry another key on rate-limit or transient provider errors.
 
 ## Render
 
-This repo now includes [render.yaml](/C:/Users/Manjunath/OneDrive/Documents/codex/CVMatchAI_copy/backend/render.yaml) to provision:
+This repo now includes [render.yaml](/C:/Users/Manjunath/OneDrive/Documents/codex/CVMatchAI_copy/backend/render.yaml) for a lower-cost single web service setup:
 
-- one Node web service for the API
-- one Node worker service for BullMQ processing
+- one Node web service running both API and worker logic
 - one Postgres database
 - one Redis instance
 
-Use `npm run start:api` for the web service and `npm run start:worker` for the worker service.
+Use `npm run start:api` for the web service with `RUN_JOB_WORKER=true`.
 
 ## Production notes
 
 - put the API behind Nginx or a cloud load balancer
-- run the API service and worker service separately in production by setting `RUN_JOB_WORKER=false` on the API and `RUN_JOB_WORKER=true` on the worker
+- free mode can run both API and worker in one web service by setting `RUN_JOB_WORKER=true`
+- if you scale up later, split API and worker into separate services
 - use managed Postgres and managed Redis in Render, Railway, Neon, Upstash, or similar
 - store uploaded files in object storage if you want resumable/retry-friendly pipelines
 - keep the Gemini API key only on the backend, never in the mobile app

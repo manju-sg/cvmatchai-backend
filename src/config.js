@@ -13,6 +13,14 @@ const parseOrigins = (value) => {
     .filter(Boolean);
 };
 
+const parseList = (value) => {
+  if (!value) return [];
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+};
+
 const config = {
   port: toInt(process.env.PORT, 3000),
   appEnv: process.env.NODE_ENV || "development",
@@ -28,6 +36,7 @@ const config = {
   queueRetentionHours: toInt(process.env.QUEUE_RETENTION_HOURS, 24),
   ssePollIntervalMs: toInt(process.env.SSE_POLL_INTERVAL_MS, 1000),
   geminiApiKey: process.env.GEMINI_API_KEY || "",
+  geminiApiKeys: parseList(process.env.GEMINI_API_KEYS),
   geminiModel: process.env.GEMINI_MODEL || "gemini-2.5-flash",
   databaseUrl: process.env.DATABASE_URL || "",
   redisUrl: process.env.REDIS_URL || "",
