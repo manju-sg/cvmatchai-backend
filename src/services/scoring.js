@@ -1,4 +1,4 @@
-const { createSummary } = require("./geminiClient");
+const { createSummary, analyzeCandidateBatch } = require("./geminiClient");
 
 const KNOWN_SKILLS = [
   "react",
@@ -148,6 +148,44 @@ function getStatus(score) {
   return "Not Matching";
 }
 
+function sanitizeCandidateName(name, fallbackName) {
+  const cleaned = (name || "").replace(/\s+/g, " ").trim();
+  const fallback = (fallbackName || "").replace(/\.[^.]+$/, "");
+
+  if (!cleaned) return fallback;
+
+  const invalidValues = [
+    "matching",
+    "partial match",
+    "not matching",
+    "candidate",
+    "best fit",
+    "comparative summary",
+    "summary",
+    "name",
+  ];
+
+  if (invalidValues.includes(cleaned.toLowerCase())) {
+    return fallback;
+  }
+
+  if (cleaned.length < 3 || cleaned.length > 80) {
+    return fallback;
+  }
+
+  return cleaned;
+}
+
+function chunkArray(items, size) {
+  const chunks = [];
+
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+
+  return chunks;
+}
+
 async function scoreCandidates(jdContent, parsedCandidates, modelPreference) {
   const jdSkills = extractSkills(jdContent);
   const jdYears = extractYears(jdContent);
@@ -155,7 +193,9 @@ async function scoreCandidates(jdContent, parsedCandidates, modelPreference) {
 
   const results = [];
 
-  for (const candidate of parsedCandidates) {
+  for (let index = 0; index < parsedCandidates.length; index += 1) {
+    const candidate = parsedCandidates[index];
+    const cvIndex = candidate.cv_index || index + 1;
     const candidateSkills = extractSkills(candidate.text);
     const matchedSkills = candidateSkills.filter((skill) => jdSkills.includes(skill));
     const missingSkills = jdSkills.filter((skill) => !candidateSkills.includes(skill));
@@ -174,6 +214,7 @@ async function scoreCandidates(jdContent, parsedCandidates, modelPreference) {
     const status = getStatus(score);
 
     results.push({
+      cv_index: cvIndex,
       candidate_name: extractName(candidate.text, candidate.fileName),
       score,
       reasoning: buildReasoning({
@@ -201,36 +242,71 @@ async function scoreCandidates(jdContent, parsedCandidates, modelPreference) {
       .join(", ")}.`;
   }
 
-  const summaryPayload = {
-    job_description: jdContent.slice(0, 4000),
-    model_preference: modelPreference || "balanced",
-    candidates: results.slice(0, 8).map((item) => ({
-      candidate_name: item.candidate_name,
-      file_name: item.file_name,
-      score: item.score,
-      status: item.status,
-      reasoning: item.reasoning,
-      matched_skills: item.matched_skills,
-      missing_skills: item.missing_skills,
+  const batches = chunkArray(
+    parsedCandidates.map((candidate, index) => ({
+      cv_index: candidate.cv_index || index + 1,
+      file_name: candidate.fileName,
+      cv_text: candidate.text.slice(0, 14000),
+      cv_text_head: candidate.text.slice(0, 2500),
     })),
-  };
+    8
+  );
 
-  const aiSummary = await createSummary(JSON.stringify(summaryPayload), undefined).catch(() => null);
+  const aiBatchResults = [];
+  const aiBatchSummaries = [];
 
-  if (aiSummary?.comparative_summary) {
-    comparativeSummary = aiSummary.comparative_summary;
+  for (const batch of batches) {
+    const aiBatch = await analyzeCandidateBatch({
+      jdContent: jdContent.slice(0, 12000),
+      candidates: batch,
+    }).catch(() => null);
+
+    if (Array.isArray(aiBatch?.results)) {
+      aiBatchResults.push(...aiBatch.results);
+    }
+
+    if (aiBatch?.comparative_summary) {
+      aiBatchSummaries.push(aiBatch.comparative_summary);
+    }
   }
 
-  if (Array.isArray(aiSummary?.candidate_reasoning)) {
-    const reasoningByName = new Map(
-      aiSummary.candidate_reasoning.map((item) => [item.candidate_name, item.reasoning])
-    );
+  if (aiBatchResults.length > 0) {
+    const byIndex = new Map(aiBatchResults.map((item) => [item.cv_index, item]));
 
     for (const result of results) {
-      if (reasoningByName.has(result.candidate_name)) {
-        result.reasoning = reasoningByName.get(result.candidate_name);
-      }
+      const aiResult = byIndex.get(result.cv_index);
+      if (!aiResult) continue;
+
+      result.candidate_name = sanitizeCandidateName(aiResult.candidate_name, result.file_name || result.candidate_name);
+      result.score = Number.isFinite(aiResult.score) ? clampScore(aiResult.score) : result.score;
+      result.reasoning = aiResult.reasoning || result.reasoning;
+      result.status = aiResult.status || result.status;
     }
+
+    results.sort((left, right) => right.score - left.score);
+  }
+
+  if (results.length > 1) {
+    const summaryPayload = {
+      job_description: jdContent.slice(0, 4000),
+      model_preference: modelPreference || "balanced",
+      batch_summaries: aiBatchSummaries,
+      candidates: results.slice(0, 12).map((item) => ({
+        candidate_name: item.candidate_name,
+        file_name: item.file_name,
+        score: item.score,
+        status: item.status,
+        reasoning: item.reasoning,
+      })),
+    };
+
+    const aiSummary = await createSummary(JSON.stringify(summaryPayload), undefined).catch(() => null);
+
+    if (aiSummary?.comparative_summary) {
+      comparativeSummary = aiSummary.comparative_summary;
+    }
+  } else if (aiBatchSummaries[0]) {
+    comparativeSummary = aiBatchSummaries[0];
   }
 
   return { results, comparativeSummary };
